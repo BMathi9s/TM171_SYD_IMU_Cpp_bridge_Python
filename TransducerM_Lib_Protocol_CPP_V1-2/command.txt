@@ -1,0 +1,17 @@
+g++ main_example.o EasyProfile.o EasyObjectDictionary.o EasyProtocol.o -o main_example.exe
+
+
+
+g++ -c -I EasyProfile main_example.cpp -o main_example.o
+g++ main_example.o EasyProfile.o EasyObjectDictionary.o EasyProtocol.o -o main_example.exe
+
+
+g++ -c -I EasyProfile imu_udp_bridge.cpp -o imu_udp_bridge.o
+g++ imu_udp_bridge.o EasyProfile.o EasyObjectDictionary.o EasyProtocol.o -o imu_udp_bridge.exe
+
+
+g++ -O2 -std=gnu++17 -I EasyProfile imu_udp_bridge.cpp EasyProfile/*.cpp -o imu_udp_bridge.exe -lws2_32
+
+main_example.exe
+
+imu_udp_bridge.exe
