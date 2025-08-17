@@ -20,6 +20,10 @@ Also if u wish to re-compile the code to output the right output for you :
 ![alt text](<IMU_settings.png>)
 
 
-to start the listening -> receiver_imu
+
+
+to start the listening -> receiver_imu.py
+
+and windows : imu_udp_bridge.cpp
 
 
