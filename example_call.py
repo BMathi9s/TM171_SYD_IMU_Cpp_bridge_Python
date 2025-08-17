@@ -14,11 +14,11 @@ imu.zero_current_rpy()
 
 try:
     while True:
-        rpy  = imu.get_rpy_deg()
-        norm = imu.get_rpy_normalized()  # requires offset (we just set it)
+        rpy  = imu.get_rpy_deg() # -180..180 with offset, mapping, inversion
+        norm = imu.get_rpy_normalized()  # requires offset -1..1 with mapping, inversion
         if rpy is not None:
             roll, pitch, yaw = rpy
-            print(f"RPY [deg]: roll={roll:.2f}, pitch={pitch:.2f}, yaw={yaw:.2f}")
+            print(f"RPY [deg]: roll={roll:.2f}, pitch={pitch:.2f}, yaw={yaw:.2f}") 
             nr, np_, ny = norm
             print(f"RPY [norm]: roll={nr:.2f}, pitch={np_:.2f}, yaw={ny:.2f}")
         time.sleep(0.05)
