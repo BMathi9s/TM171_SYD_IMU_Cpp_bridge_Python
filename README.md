@@ -21,13 +21,31 @@ Also if u wish to re-compile the code to output the right output for you :
 
 
 
+Windows - > 
+
+imu_udp_bridge.exe 
+-> this .exe include a list port
+
+Linux -> 
+
+scan port 
+
+sudo chmod a+rw /dev/ttyUSB0 #that port
+
+
+
+then -> 
 
 to start the listening -> receiver_imu.py
 
-and windows : imu_udp_bridge.cpp
+
 
 tag generator 
 https://chaitanyantr.github.io/apriltag.html
+
+
+
+
 
 
 

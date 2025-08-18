@@ -15,3 +15,20 @@ g++ -O2 -std=gnu++17 -I EasyProfile imu_udp_bridge.cpp EasyProfile/*.cpp -o imu_
 main_example.exe
 
 imu_udp_bridge.exe
+
+
+
+linux
+
+g++ -O2 -std=gnu++17 -I EasyProfile imu_udp_bridge_linux.cpp EasyProfile/*.cpp -o imu_udp_bridge
+
+
+
+./imu_udp_bridge                    
+
+
+# then type /dev/ttyUSB0 or 'list'
+
+
+# If permission denied:
+sudo chmod a+rw /dev/ttyUSB0
