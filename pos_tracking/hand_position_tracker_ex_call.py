@@ -1,7 +1,7 @@
 # demo_run.py
 import time
 import cv2
-from hand_position_tracker import hand_position_tracker   # <- class name
+from TransducerM_Lib_Protocol_CPP.pos_tracking.hand_position_tracker import hand_position_tracker   # <- class name
 
 def main():
     tracker = hand_position_tracker(
