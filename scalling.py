@@ -20,8 +20,8 @@ import pyrealsense2 as rs
 
 # ======== Tunables ========
 COLOR_W, COLOR_H, FPS = 640, 480, 30
-TAG_SIZE_M   = 0.08     # your printed tags are 80 mm
-DEPTH_RANGE  = (0.25, 1.5)  # accept depth [m]
+TAG_SIZE_M   = 0.072     # your printed tags are 80 mm
+DEPTH_RANGE  = (0.25, 1.8)  # accept depth [m]
 K_NEIGH      = 5        # median window for depth sampling
 EMA_ALPHA    = 0.75     # 3D smoothing (0 none, 1 very sticky)
 POSE_AVG_FR  = 30       # frames to average when capturing pose
@@ -254,7 +254,7 @@ try:
                 R_world_cam = (R_adj @ R_mean).astype(np.float32)
                 t_world_cam = (R_adj @ t_mean).astype(np.float32)
                 have_pose = True
-                print("[pose] locked. use [ or ] to rotate by 90°, X/Y/Z to flip axes.")
+                print("[pose] locked. use [ or ] to rotate by 90°, X/Y/Z to flip axes.  !!! bug to fix its a bit tricky to to the flip coz it also change the yaw, so play with both")
             else:
                 print("[pose] failed (not enough frames). Make sure tags are visible.")
 
