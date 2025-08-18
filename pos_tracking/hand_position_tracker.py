@@ -9,6 +9,10 @@ import pyrealsense2 as rs
 import re  
 
 
+#TODO fix bug when calirbating the world space which doesnt put you into the hand menu ->> right not just close and load the calibration file
+#TODO when clicking on c is doesnt lock the camera pose to the world space anymore, gotta fix that, but its not a big deal
+#TODO improve fingger tracking ~ maybe each finger calibration or ik
+
 class hand_position_tracker:
     """
     RealSense color+depth + MediaPipe wrist → camera 3D → world 3D (from AprilTag board) → [-1,1].
@@ -69,13 +73,28 @@ class hand_position_tracker:
         
         
         self.PROJ_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        self.CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration")
+        self.CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration", "world_calibration")
         os.makedirs(self.CALIB_DIR, exist_ok=True)
 
         # Default config path: <project>/calibration/desk_calib.yaml
         if cfg_file is None:
             cfg_file = os.path.join(self.CALIB_DIR, "desk_calib.yaml")
         self.CFG_FILE = cfg_file
+        
+                # ---- Hand-flexion calibration (separate from XYZ/pose) ----
+        # Folder: TransducerM_Lib_Protocol_CPP\calibration\hand_calibration
+        self.HAND_CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration", "hand_calibration")
+        os.makedirs(self.HAND_CALIB_DIR, exist_ok=True)
+
+        # Open/Close angle snapshots (degrees) captured from self._angles
+        self._hand_open  = None   # same nested dict shape as self._angles
+        self._hand_close = None
+
+        # Min usable range (deg). If |close - open| < threshold ⇒ normalized = 0 for safety.
+        self.HAND_MIN_RANGE_DEG = 5.0
+
+        
+        
         
         self.SHOW_LM = show_landmark
         self.BAKE_AT_CAPTURE = bool(bake_adjustments_at_capture)
@@ -141,17 +160,10 @@ class hand_position_tracker:
         self._ema_pts = {}
         self.ANGLE_EMA_ALPHA = 0.7      # angle smoothing (EMA in angle-space)
         self.PT_EMA_ALPHA    = 0.75     # 3D point smoothing (already similar for wrist)
-                # ---- Hand-flexion calibration (separate from XYZ/pose) ----
-        # Folder: TransducerM_Lib_Protocol_CPP\calibration\hand_calibration
-        self.HAND_CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration", "hand_calibration")
-        os.makedirs(self.HAND_CALIB_DIR, exist_ok=True)
+        self.SHOW_FLEX_PANEL = True
+        self.FLEX_PANEL_SCALE = 1.0  # 1.0 = default bar size; set 0.8 for smaller, 1.2 for larger
 
-        # Open/Close angle snapshots (degrees) captured from self._angles
-        self._hand_open  = None   # same nested dict shape as self._angles
-        self._hand_close = None
-
-        # Min usable range (deg). If |close - open| < threshold ⇒ normalized = 0 for safety.
-        self.HAND_MIN_RANGE_DEG = 5.0
+        
 
 
     # ---------- Vector helpers for joint angles ----------
@@ -176,6 +188,79 @@ class hand_position_tracker:
         c = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
         s = float(np.linalg.norm(np.cross(v1, v2)))
         return math.atan2(s, c)
+    
+    def _draw_mini_bar(self, img, x, y, w, h, val, label, thickness=1):
+        # Frame
+        cv2.rectangle(img, (x, y), (x + w, y + h), (160, 160, 160), thickness)
+        # Cursor at [-1,1] mapped across width
+        cx = int(x + int((val + 1.0) * 0.5 * w))
+        cv2.line(img, (cx, y), (cx, y + h), (0, 200, 255), max(1, thickness))
+        # Label
+        cv2.putText(img, f"{label}:{val:+.2f}", (x, y - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1)
+
+    def _draw_flexion_panel(self, img, corner="br"):
+        """
+        15 normalized finger flexion bars:
+        Thumb (CMC/MCP/IP) + Index/Middle/Ring/Pinky (MCP/PIP/DIP)
+        Values are in [-1, 1]. Set self.FLEX_PANEL_SCALE to resize.
+        """
+        n = self.get_all_flexions_normalized()
+
+        # Row spec: (short_label, values_dict, joint_order_list)
+        rows = [
+            ("Thb", n["thumb"],  ["CMC", "MCP", "IP"]),
+            ("Idx", n["index"],  ["MCP", "PIP", "DIP"]),
+            ("Mid", n["middle"], ["MCP", "PIP", "DIP"]),
+            ("Rng", n["ring"],   ["MCP", "PIP", "DIP"]),
+            ("Pky", n["pinky"],  ["MCP", "PIP", "DIP"]),
+        ]
+
+        h_img, w_img = img.shape[:2]
+        s = float(getattr(self, "FLEX_PANEL_SCALE", 1.0))
+        bar_w, bar_h = int(90 * s), int(12 * s)   # size per bar
+        pad_x, pad_y = int(10 * s), int(14 * s)   # spacing between bars
+        block_pad    = int(12 * s)                # panel inset from edges
+
+        cols = 3  # three joints per row
+        panel_w = cols * bar_w + (cols - 1) * pad_x
+        panel_h = len(rows) * (bar_h + pad_y)
+
+        # Anchor
+        if corner == "br":
+            x0 = w_img - panel_w - block_pad
+            y0 = h_img - panel_h - block_pad
+        elif corner == "tr":
+            x0 = w_img - panel_w - block_pad
+            y0 = block_pad + 40
+        elif corner == "bl":
+            x0 = block_pad
+            y0 = h_img - panel_h - block_pad
+        else:  # 'tl'
+            x0 = block_pad
+            y0 = block_pad + 40
+
+        # Background
+        overlay = img.copy()
+        cv2.rectangle(overlay, (x0 - 6, y0 - 22), (x0 + panel_w + 6, y0 + panel_h + 6), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.25, img, 0.75, 0, img)
+
+        # Title
+        cv2.putText(img, "Finger Flex (norm)", (x0, y0 - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Draw rows
+        for r, (short, vals, joint_order) in enumerate(rows):
+            y = y0 + r * (bar_h + pad_y)
+            # Row label
+            cv2.putText(img, short, (x0 - 40, y + bar_h),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+            # Bars: iterate over joint order
+            for c, j in enumerate(joint_order):
+                x = x0 + c * (bar_w + pad_x)
+                val = float(vals.get(j, 0.0))
+                self._draw_mini_bar(img, x, y, bar_w, bar_h, val, j, thickness=1)
+
 
     @staticmethod
     def _ema(prev, new, alpha):
@@ -320,6 +405,112 @@ class hand_position_tracker:
     def get_all_flexions(self):
         """Convenience snapshot of all fingers (degrees)."""
         return {k: dict(v) for k, v in self._angles.items()}
+    
+    
+    
+    # ---------- Normalized flexion getters [-1,1] ----------
+    def get_normalized_flexion_index(self):
+        return dict(self._normalize_all_fingers(
+            {"index": self._angles["index"]},
+            self._hand_open, self._hand_close
+        )["index"])
+
+    def get_normalized_flexion_middle(self):
+        return dict(self._normalize_all_fingers(
+            {"middle": self._angles["middle"]},
+            self._hand_open, self._hand_close
+        )["middle"])
+
+    def get_normalized_flexion_ring(self):
+        return dict(self._normalize_all_fingers(
+            {"ring": self._angles["ring"]},
+            self._hand_open, self._hand_close
+        )["ring"])
+
+    def get_normalized_flexion_pinky(self):
+        return dict(self._normalize_all_fingers(
+            {"pinky": self._angles["pinky"]},
+            self._hand_open, self._hand_close
+        )["pinky"])
+
+    def get_normalized_flexion_thumb(self):
+        return dict(self._normalize_all_fingers(
+            {"thumb": self._angles["thumb"]},
+            self._hand_open, self._hand_close
+        )["thumb"])
+
+    def get_all_flexions_normalized(self):
+        """Full snapshot of normalized flexions (degrees→[-1,1]) for all fingers."""
+        return self._normalize_all_fingers(self._angles, self._hand_open, self._hand_close)
+
+    
+        # ---------- Hand-flexion calibration API ----------
+    def record_hand_open(self):
+        """Capture current flexion angles (deg) as the 'open hand' calibration."""
+        self._hand_open = self._angles_snapshot()
+        return {k: dict(v) for k, v in self._hand_open.items()}
+
+    def record_hand_close(self):
+        """Capture current flexion angles (deg) as the 'closed hand' calibration."""
+        self._hand_close = self._angles_snapshot()
+        return {k: dict(v) for k, v in self._hand_close.items()}
+
+    def save_hand_calibration(self, path: str | None = None):
+        """
+        Save open/close angle sets to YAML under .../calibration/hand_calibration/.
+        Prompts for a name if not provided. Does NOT touch XYZ/pose calibration.
+        """
+        if self._hand_open is None or self._hand_close is None:
+            raise RuntimeError("Hand calibration incomplete. Call record_hand_open() and record_hand_close() first.")
+        if path is None:
+            base = self._prompt_config_basename("save hand calibration")
+            if base is None:
+                print("[hand] Save cancelled.")
+                return None
+            path = self._resolve_hand_cfg_path(base)
+        else:
+            path = self._resolve_hand_cfg_path(path)
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = {
+            "type": "hand_flexion_calibration",
+            "min_range_deg": float(self.HAND_MIN_RANGE_DEG),
+            "open":  self._hand_open,
+            "close": self._hand_close,
+        }
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f)
+        print(f"[hand] Saved hand calibration: {path}")
+        return path
+
+    def load_hand_calibration(self, path: str | None = None):
+        """
+        Load open/close angle sets from YAML under .../calibration/hand_calibration/.
+        Prompts for a name if not provided.
+        """
+        if path is None:
+            base = self._prompt_config_basename("load hand calibration")
+            if base is None:
+                print("[hand] Load cancelled.")
+                return None
+            path = self._resolve_hand_cfg_path(base)
+        else:
+            path = self._resolve_hand_cfg_path(path)
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+
+        self._hand_open  = data.get("open",  None)
+        self._hand_close = data.get("close", None)
+        # optional: respect file's min range, else keep current
+        mrd = data.get("min_range_deg", None)
+        if isinstance(mrd, (int, float)) and np.isfinite(mrd):
+            self.HAND_MIN_RANGE_DEG = float(mrd)
+        print(f"[hand] Loaded hand calibration: {path}")
+        return path
+
 
     
     def _resolve_cfg_path(self, path_or_base: str) -> str:
@@ -332,7 +523,60 @@ class hand_position_tracker:
         if os.path.isabs(p):
             return p
         return os.path.join(self.CALIB_DIR, p)
-    
+    # ---------- Hand-calibration helpers ----------
+    def _resolve_hand_cfg_path(self, path_or_base: str) -> str:
+        """
+        Resolve a hand-calibration YAML path under HAND_CALIB_DIR.
+        Accepts bare names (adds .yaml) or absolute/relative paths.
+        """
+        p = (path_or_base or "").strip()
+        if not p:
+            # Will be handled by callers that prompt the user
+            return os.path.join(self.HAND_CALIB_DIR, "hand_default.yaml")
+        if not p.lower().endswith(".yaml"):
+            p = f"{p}.yaml"
+        if os.path.isabs(p):
+            return p
+        # If caller passed a relative path that includes folders, keep it; else drop in HAND_CALIB_DIR
+        base_dir = self.HAND_CALIB_DIR if (os.path.dirname(p) == "") else ""
+        return os.path.join(base_dir, p)
+
+    def _angles_snapshot(self):
+        """Deep-copy the current degrees dictionary (self._angles)."""
+        return {finger: {j: float(a) for j, a in joints.items()} for finger, joints in self._angles.items()}
+
+    @staticmethod
+    def _norm_clip(x):
+        return float(max(-1.0, min(1.0, x)))
+
+    def _normalize_joint(self, a_now, a_open, a_close):
+        """
+        Map degrees → [-1,1] so that open -> -1, close -> +1.
+        Safety: if range < HAND_MIN_RANGE_DEG or any missing -> 0.
+        """
+        if a_open is None or a_close is None:
+            return 0.0
+        rng = float(a_close - a_open)
+        if not np.isfinite(a_now) or not np.isfinite(rng) or abs(rng) < float(self.HAND_MIN_RANGE_DEG):
+            return 0.0
+        # n = -1 at open, +1 at close, linear in between; clamp
+        n = 2.0 * ((float(a_now) - float(a_open)) / rng) - 1.0
+        return self._norm_clip(n)
+
+    def _normalize_all_fingers(self, angles_now, calib_open, calib_close):
+        """
+        Vectorized normalization for the full nested dict.
+        Missing/bad joints -> 0 by design.
+        """
+        out = {}
+        for finger, joints in angles_now.items():
+            out[finger] = {}
+            for jname, a_now in joints.items():
+                a_open  = calib_open.get(finger, {}).get(jname, None) if calib_open else None
+                a_close = calib_close.get(finger, {}).get(jname, None) if calib_close else None
+                out[finger][jname] = self._normalize_joint(a_now, a_open, a_close)
+        return out
+
     def _prompt_config_basename(self, action: str):
         """
         Prompt until we get a valid basename (no '.yaml'), or user cancels.
@@ -354,6 +598,59 @@ class hand_position_tracker:
                 print("Invalid name. Use only letters, digits, underscores, or dashes (no spaces or dots).")
                 continue
             return base
+        
+        
+    # ---------- Overlay UI helpers (non-blocking) ----------
+    def _overlay_text_input(self, window_name, prompt, subhint="", initial_text=""):
+        """
+        On-screen name entry. Returns typed string or None if cancelled (ESC).
+        Avoids terminal input() so OpenCV never blocks.
+        """
+        import cv2, string, time
+        allowed = string.ascii_letters + string.digits + "_-."
+        text = initial_text
+        while True:
+            color_bgr, depth_vis = self.process(draw_landmarks=True)
+            if color_bgr is None:
+                continue
+            y = 20
+            cv2.putText(color_bgr, prompt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2); y += 24
+            if subhint:
+                cv2.putText(color_bgr, subhint, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1); y += 20
+            cv2.putText(color_bgr, f"> {text}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2); y += 26
+            cv2.putText(color_bgr, "[ENTER]=OK   [BACKSPACE]=del   [ESC]=cancel", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,180,180), 1)
+            cv2.imshow(window_name, color_bgr)
+            if depth_vis is not None:
+                cv2.imshow("Depth (vis)", depth_vis)
+
+            k = cv2.waitKey(1) & 0xFF
+            if k in (13, 10):   # ENTER
+                return text.strip() or None
+            if k == 27:         # ESC
+                return None
+            if k in (8, 127):   # BACKSPACE / DEL
+                text = text[:-1]
+                continue
+            if 32 <= k <= 126:
+                ch = chr(k)
+                if ch in allowed:
+                    text += ch
+
+    def _overlay_flash(self, window_name, message, ms=900):
+        """Quick toast-style message."""
+        import cv2, time
+        t0 = time.time()
+        while (time.time() - t0) * 1000 < ms:
+            color_bgr, depth_vis = self.process(draw_landmarks=True)
+            if color_bgr is None:
+                continue
+            cv2.putText(color_bgr, message, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+            cv2.imshow(window_name, color_bgr)
+            if depth_vis is not None:
+                cv2.imshow("Depth (vis)", depth_vis)
+            cv2.waitKey(1)
+
 
 
 
@@ -643,6 +940,9 @@ class hand_position_tracker:
         L = self.lims
         y0 = put(color_bgr, f"Limits x:[{L['x_min']},{L['x_max']}], y:[{L['y_min']},{L['y_max']}], z:[{L['z_min']},{L['z_max']}]", y0)
         put(color_bgr, "Hotkeys: C capture  [ ] rotate  X/Y/Z flip  1..6 set lims  S save  L load  Q quit", y0)
+        
+        if getattr(self, "SHOW_FLEX_PANEL", True):
+            self._draw_flexion_panel(color_bgr, corner="br")
 
     # ======== Internals (helpers) ========
     def _detect_tag_pose(self, bgr):
@@ -708,41 +1008,113 @@ class hand_position_tracker:
     
     # ======== NEW: startup menu & calibration wizard ========
 
-    def startup_menu(self, path=None):
+    def startup_menu(self, window_name="Startup"):
         """
-        Console menu:
-        [1] Load calibration (prompts for name; appends .yaml)
-        [2] Create new calibration (runs wizard; save prompts for name)
-        Returns 'loaded' or 'created'.
+        On-screen menu for XYZ calibration:
+          L = Load existing (name prompt overlay)
+          N = New (launches calibration wizard in this same window)
+          ESC = cancel
+        Returns 'loaded', 'created', or False if cancelled.
         """
+        import cv2, os
         while True:
-            print("\n=== Start ===")
-            print("[1] Load calibration")
-            print("[2] Create new calibration")
-            choice = input("Select 1 or 2: ").strip()
-            if choice == "1":
-                base = self._prompt_config_basename("load")
-                if base is None:
+            color_bgr, depth_vis = self.process(draw_landmarks=True)
+            if color_bgr is None:
+                continue
+
+            y = 24
+            cv2.putText(color_bgr, "=== XYZ Calibration ===", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2); y += 30
+            cv2.putText(color_bgr, "[L] Load existing   [N] New (open wizard)   [ESC] Cancel", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            cv2.imshow(window_name, color_bgr)
+            if depth_vis is not None:
+                cv2.imshow("Depth (vis)", depth_vis)
+
+            k = cv2.waitKey(1) & 0xFF
+            if k == 27:  # ESC
+                return False
+
+            # Load existing
+            if k in (ord('l'), ord('L')):
+                base = self._overlay_text_input(window_name, "Load XYZ calib (name only):", subhint="Folder: .../calibration/")
+                if not base:
+                    self._overlay_flash(window_name, "[load] Cancelled.", ms=700)
                     continue
                 cfg_path = self._resolve_cfg_path(base)
                 if not os.path.exists(cfg_path):
-                    print(f"[load] '{cfg_path}' not found. Try again or choose [2] to create one.")
+                    self._overlay_flash(window_name, "[load] File not found.", ms=900)
                     continue
                 try:
-                    p = self.load_calibration(cfg_path)
-                    print(f"[loaded] {p}")
+                    self.load_calibration(cfg_path)
+                    self._overlay_flash(window_name, f"[loaded XYZ] {os.path.basename(cfg_path)}", ms=900)
                     return "loaded"
                 except FileNotFoundError:
-                    print(f"[load] '{cfg_path}' not found. (Race condition?)")
-            elif choice == "2":
-                ok = self.calibration_wizard()
+                    self._overlay_flash(window_name, "[load] File disappeared.", ms=900)
+
+            # New: run wizard in-place
+            if k in (ord('n'), ord('N')):
+                ok = self.calibration_wizard(window_name=window_name)
                 if ok:
-                    print("[created] Calibration captured.")
+                    # User should press 'S' inside the wizard to save. We just continue.
+                    self._overlay_flash(window_name, "[XYZ] Created. (Use 'S' in wizard to save.)", ms=1000)
                     return "created"
                 else:
-                    print("[wizard] Cancelled or failed. Try again.")
-            else:
-                print("Please type 1 or 2.")
+                    self._overlay_flash(window_name, "[XYZ] Wizard cancelled.", ms=900)
+
+    def hand_startup_menu(self, window_name="Main"):
+        """
+        On-screen menu for Hand Flexion calibration:
+          L = Load existing (name prompt overlay)
+          N = New (launches hand wizard; O=open, P=close, S=save; returns immediately after S)
+          ESC = skip/cancel
+        Returns 'loaded', 'created', or False if cancelled.
+        """
+        import cv2, os
+        while True:
+            color_bgr, depth_vis = self.process(draw_landmarks=True)
+            if color_bgr is None:
+                continue
+
+            y = 24
+            cv2.putText(color_bgr, "=== Hand Flexion Calibration ===", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2); y += 30
+            cv2.putText(color_bgr, "[L] Load existing   [N] New (open wizard)   [ESC] Skip", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            cv2.imshow(window_name, color_bgr)
+            if depth_vis is not None:
+                cv2.imshow("Depth (vis)", depth_vis)
+
+            k = cv2.waitKey(1) & 0xFF
+            if k == 27:  # ESC
+                return False
+
+            # Load existing
+            if k in (ord('l'), ord('L')):
+                base = self._overlay_text_input(window_name, "Load HAND calib (name only):",
+                                                subhint="Folder: .../calibration/hand_calibration/")
+                if not base:
+                    self._overlay_flash(window_name, "[hand] Load cancelled.", ms=700)
+                    continue
+                path = self._resolve_hand_cfg_path(base)
+                if not os.path.exists(path):
+                    self._overlay_flash(window_name, "[hand] File not found.", ms=900)
+                    continue
+                try:
+                    self.load_hand_calibration(path)
+                    self._overlay_flash(window_name, "[hand] Loaded.", ms=800)
+                    return "loaded"
+                except FileNotFoundError:
+                    self._overlay_flash(window_name, "[hand] File disappeared.", ms=900)
+
+            # New: launch hand wizard
+            if k in (ord('n'), ord('N')):
+                ok = self.hand_calibration_wizard(window_name=window_name)
+                if ok:
+                    self._overlay_flash(window_name, "[hand] Created & saved.", ms=900)
+                    return "created"
+                else:
+                    # Wizard returns False on ESC or if not both O&P captured before Enter.
+                    self._overlay_flash(window_name, "[hand] Wizard cancelled.", ms=900)
+
 
 
     def calibration_wizard(self, window_name="Calibration Wizard"):
@@ -821,19 +1193,150 @@ class hand_position_tracker:
             if key == ord('6'):
                 self.set_limit_from_current('z', 'max')
             if key in (ord('s'), ord('S')):
-                while True:
-                    base = self._prompt_config_basename("save")
-                    if base is None:
-                        print("[save] Cancelled.")
-                        break
-                    cfg_path = self._resolve_cfg_path(base)
-                    if os.path.exists(cfg_path):
-                        resp = input(f"'{cfg_path}' exists. Overwrite? [y/N]: ").strip().lower()
-                        if resp != "y":
-                            print("Choose another name.")
-                            continue
+                base = self._overlay_text_input(
+                    window_name,
+                    "Save XYZ calibration name ('.yaml' auto):",
+                    subhint="Folder: .../calibration/",
+                    initial_text=""
+                )
+                if base is None:
+                    self._overlay_flash(window_name, "[save] Cancelled.", ms=700)
+                    continue
+                cfg_path = self._resolve_cfg_path(base)
+                if os.path.exists(cfg_path):
+                    # ask to overwrite
+                    ask = "File exists. Press 'Y' to overwrite or any key to cancel."
+                    y0 = 20
+                    while True:
+                        color_bgr, depth_vis = self.process(draw_landmarks=True)
+                        if color_bgr is None: continue
+                        y = y0
+                        cv2.putText(color_bgr, ask, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2); y += 24
+                        cv2.imshow(window_name, color_bgr)
+                        if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
+                        kk = cv2.waitKey(1) & 0xFF
+                        if kk in (ord('y'), ord('Y')):
+                            break
+                        if kk != 255:
+                            cfg_path = None
+                            break
+                if cfg_path:
                     p = self.save_calibration(cfg_path)
-                    self.CFG_FILE = cfg_path  # remember as default for next time
-                    print(f"[saved] {p}")
-                    break
+                    self.CFG_FILE = cfg_path
+                    self._overlay_flash(window_name, f"[saved XYZ] {os.path.basename(p)}", ms=900)
 
+
+    def hand_calibration_wizard(self, window_name="Hand Flexion Calibration"):
+        """
+        Press:
+          O = record OPEN hand (fingers extended/relaxed),
+          P = record CLOSED hand (make a firm fist),
+          S = save (prompts for name in hand_calibration/),
+          L = load (prompts),
+          ENTER = finish, ESC = cancel.
+        """
+        print("\n=== Hand Flexion Calibration ===")
+        print("  • Show your hand to the camera.")
+        print("  • Press 'O' to capture OPEN; 'P' to capture CLOSE.")
+        print("  • 'S' to save, 'L' to load, ENTER to finish, ESC to cancel.\n")
+
+        def _put(img, s, y):
+            cv2.putText(img, s, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+            return y + 18
+
+        open_ok = self._hand_open  is not None
+        close_ok = self._hand_close is not None
+
+        while True:
+            color_bgr, depth_vis = self.process(draw_landmarks=True)
+            if color_bgr is None:
+                continue
+
+            y = 20
+            y = _put(color_bgr, f"[O] Open:  {'OK' if open_ok else '—'}", y)
+            y = _put(color_bgr, f"[P] Close: {'OK' if close_ok else '—'}", y)
+            y = _put(color_bgr, f"Min range: {self.HAND_MIN_RANGE_DEG:.1f} deg (too small ⇒ normalized=0)", y)
+            y = _put(color_bgr, "[S] Save  [L] Load  [ENTER] Finish  [ESC] Cancel", y)
+
+            # (Optional) Show index MCP normalized live (once both captured)
+            if open_ok and close_ok:
+                idx_n = self.get_normalized_flexion_index()
+                y = _put(color_bgr, f"Index MCP/PIP/DIP (norm): {idx_n['MCP']:+.2f} {idx_n['PIP']:+.2f} {idx_n['DIP']:+.2f}", y)
+
+            cv2.imshow(window_name, color_bgr)
+            if depth_vis is not None:
+                cv2.imshow("Depth (vis)", depth_vis)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (13, 10):  # ENTER
+                return open_ok and close_ok
+            if key == 27:       # ESC
+                return False
+            if key in (ord('o'), ord('O')):
+                self.record_hand_open()
+                open_ok = True
+                print("[hand] Captured OPEN.")
+            if key in (ord('p'), ord('P')):
+                self.record_hand_close()
+                close_ok = True
+                print("[hand] Captured CLOSE.")
+            if key in (ord('s'), ord('S')):
+                # Only allow save once both OPEN and CLOSE captured
+                if not (open_ok and close_ok):
+                    self._overlay_flash(window_name, "[hand] Capture OPEN (O) and CLOSE (P) first.", ms=1100)
+                    continue
+                base = self._overlay_text_input(
+                    window_name,
+                    "Save HAND calibration name ('.yaml' auto):",
+                    subhint="Folder: .../calibration/hand_calibration/",
+                    initial_text=""
+                )
+                if base is None:
+                    self._overlay_flash(window_name, "[hand] Save cancelled.", ms=700)
+                    continue
+                path = self._resolve_hand_cfg_path(base)
+                if os.path.exists(path):
+                    ask = "File exists. Press 'Y' to overwrite or any key to cancel."
+                    while True:
+                        color_bgr, depth_vis = self.process(draw_landmarks=True)
+                        if color_bgr is None: continue
+                        cv2.putText(color_bgr, ask, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+                        cv2.imshow(window_name, color_bgr)
+                        if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
+                        kk = cv2.waitKey(1) & 0xFF
+                        if kk in (ord('y'), ord('Y')):
+                            break
+                        if kk != 255:
+                            path = None
+                            break
+                if path:
+                    try:
+                        self.save_hand_calibration(path)
+                        self._overlay_flash(window_name, f"[saved hand] {os.path.basename(path)}", ms=900)
+                        # Immediately finish so main loop starts printing
+                        return True
+                    except RuntimeError as e:
+                        self._overlay_flash(window_name, f"[hand] Save failed", ms=900)
+            if key in (ord('l'), ord('L')):
+                base = self._overlay_text_input(
+                    window_name,
+                    "Load HAND calibration (type name without .yaml):",
+                    subhint="Folder: .../calibration/hand_calibration/",
+                    initial_text=""
+                )
+                if base is None:
+                    self._overlay_flash(window_name, "[hand] Load cancelled.", ms=700)
+                    continue
+                path = self._resolve_hand_cfg_path(base)
+                if not os.path.exists(path):
+                    self._overlay_flash(window_name, "[hand] File not found.", ms=1000)
+                    continue
+                self.load_hand_calibration(path)
+                open_ok  = self._hand_open  is not None
+                close_ok = self._hand_close is not None
+                self._overlay_flash(window_name, "[hand] Loaded.", ms=700)
+
+            if key in (ord('l'), ord('L')):
+                self.load_hand_calibration(None)
+                open_ok  = self._hand_open  is not None
+                close_ok = self._hand_close is not None

@@ -1,9 +1,16 @@
 # demo_run.py
 import time
 import cv2
-from hand_position_tracker import hand_position_tracker
+from pos_tracking.hand_position_tracker import hand_position_tracker
+from imu_client import ImuUdpClient
+
+imu = ImuUdpClient(smooth_alpha=0.0)
+imu.wait_for_first_sample(timeout_s=2.0)
 
 def main():
+    
+    imu.zero_current_rpy() 
+    
     tracker = hand_position_tracker(
         color_w=1280, color_h=720,
         tag_size_m=0.072,
@@ -42,6 +49,10 @@ def main():
             cv2.imshow(MAIN_WIN, color_bgr)
             if depth_vis is not None:
                 cv2.imshow("Depth (vis)", depth_vis)
+                
+                
+                
+            
 
             # Print values to terminal at ~10 Hz
             now = time.time()
@@ -49,6 +60,7 @@ def main():
                 last_print = now
                 nx, ny, nz = tracker.get_normalized_xyz()
                 wxyz = tracker.get_world_xyz()
+                
 
                 # Degrees
                 index_flex  = tracker.get_flexion_index()
@@ -63,7 +75,9 @@ def main():
                 n_ring   = tracker.get_normalized_flexion_ring()
                 n_pinky  = tracker.get_normalized_flexion_pinky()
                 n_thumb  = tracker.get_normalized_flexion_thumb()
-
+                norm = imu.get_rpy_normalized()
+                nr, np_, ny = norm
+                
                 if wxyz is not None:
                     print("looping")
                     # print(f"World [m]: x={wxyz[0]:+.3f}, y={wxyz[1]:+.3f}, z={wxyz[2]:+.3f}")
@@ -80,6 +94,8 @@ def main():
                     print(f"Ring(norm):   MCP={n_ring['MCP']:+.2f} PIP={n_ring['PIP']:+.2f} DIP={n_ring['DIP']:+.2f}")
                     print(f"Pinky(norm):  MCP={n_pinky['MCP']:+.2f} PIP={n_pinky['PIP']:+.2f} DIP={n_pinky['DIP']:+.2f}")
                     print(f"Thumb(norm):  CMC={n_thumb['CMC']:+.2f} MCP={n_thumb['MCP']:+.2f} IP={n_thumb['IP']:+.2f}")
+                    
+                    print(f"RPY [norm]: roll={nr:.2f}, pitch={np_:.2f}, yaw={ny:.2f}")
 
             # Hotkeys (optional convenience)
             key = cv2.waitKey(1) & 0xFF
@@ -87,6 +103,8 @@ def main():
                 break
             if key in (ord('h'), ord('H')):   # re-run hand wizard anytime
                 tracker.hand_calibration_wizard(window_name=MAIN_WIN)
+            if key in (ord('i'), ord('I')):
+                imu.zero_current_rpy()
 
     finally:
         tracker.stop()
