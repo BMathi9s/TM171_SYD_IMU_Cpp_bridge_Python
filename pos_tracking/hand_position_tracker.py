@@ -53,7 +53,7 @@ class hand_position_tracker:
         k_neigh=5,                       # median patch for depth sampling
         ema_alpha=0.75,                  # 3D smoothing
         pose_avg_frames=30,              # frames to average on capture
-        cfg_file="desk_calib.yaml",
+        cfg_file= None,
         show_landmark=mp.solutions.hands.HandLandmark.WRIST,
         bake_adjustments_at_capture=True # keep "as-is" behavior
     ):
@@ -66,7 +66,17 @@ class hand_position_tracker:
         self.K_NEIGH = int(k_neigh)
         self.EMA_ALPHA = float(ema_alpha)
         self.POSE_AVG_FR = int(pose_avg_frames)
+        
+        
+        self.PROJ_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration")
+        os.makedirs(self.CALIB_DIR, exist_ok=True)
+
+        # Default config path: <project>/calibration/desk_calib.yaml
+        if cfg_file is None:
+            cfg_file = os.path.join(self.CALIB_DIR, "desk_calib.yaml")
         self.CFG_FILE = cfg_file
+        
         self.SHOW_LM = show_landmark
         self.BAKE_AT_CAPTURE = bool(bake_adjustments_at_capture)
 
@@ -121,7 +131,18 @@ class hand_position_tracker:
     def _valid_basename(name: str) -> bool:
         # letters, digits, underscore, dash only
         return bool(re.fullmatch(r"[A-Za-z0-9_-]+", name))
-
+    
+    def _resolve_cfg_path(self, path_or_base: str) -> str:
+        """If given a bare name (no .yaml or folder), drop into CALIB_DIR and add .yaml."""
+        p = path_or_base.strip()
+        # Add .yaml if missing
+        if not (p.lower().endswith(".yaml")):
+            p = f"{p}.yaml"
+        # If absolute or already points somewhere, keep it; else put in calibration/
+        if os.path.isabs(p):
+            return p
+        return os.path.join(self.CALIB_DIR, p)
+    
     def _prompt_config_basename(self, action: str):
         """
         Prompt until we get a valid basename (no '.yaml'), or user cancels.
@@ -144,9 +165,9 @@ class hand_position_tracker:
                 continue
             return base
 
-    @staticmethod
-    def _to_yaml_path(basename: str) -> str:
-        return f"{basename}.yaml"
+    # @staticmethod
+    # def _to_yaml_path(basename: str) -> str:
+    #     return f"{basename}.yaml"
 
 
     # ======== Public getters/setters ========
@@ -187,6 +208,8 @@ class hand_position_tracker:
     def save_calibration(self, path=None):
         if path is None:
             path = self.CFG_FILE
+        path = self._resolve_cfg_path(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         data = {
             "R_world_cam": self.R_world_cam.tolist(),
             "t_world_cam": self.t_world_cam.flatten().tolist(),
@@ -198,12 +221,13 @@ class hand_position_tracker:
         }
         with open(path, "w") as f:
             yaml.safe_dump(data, f)
-        self.CFG_FILE = path  # remember where we saved
+        self.CFG_FILE = path
         return path
 
     def load_calibration(self, path=None):
         if path is None:
             path = self.CFG_FILE
+        path = self._resolve_cfg_path(path)
         if not os.path.exists(path):
             raise FileNotFoundError(path)
         with open(path, "r") as f:
@@ -217,7 +241,7 @@ class hand_position_tracker:
         self.TAG_SIZE_M = float(data.get("tag_size_m", self.TAG_SIZE_M))
         self.BAKE_AT_CAPTURE = bool(data.get("bake_at_capture", self.BAKE_AT_CAPTURE))
         self._have_pose = True
-        self.CFG_FILE = path  # remember what we loaded
+        self.CFG_FILE = path
         return path
 
     # ======== Lifecycle ========
@@ -506,7 +530,7 @@ class hand_position_tracker:
                 base = self._prompt_config_basename("load")
                 if base is None:
                     continue
-                cfg_path = self._to_yaml_path(base)
+                cfg_path = self._resolve_cfg_path(base)
                 if not os.path.exists(cfg_path):
                     print(f"[load] '{cfg_path}' not found. Try again or choose [2] to create one.")
                     continue
@@ -608,7 +632,7 @@ class hand_position_tracker:
                     if base is None:
                         print("[save] Cancelled.")
                         break
-                    cfg_path = self._to_yaml_path(base)
+                    cfg_path = self._resolve_cfg_path(base)
                     if os.path.exists(cfg_path):
                         resp = input(f"'{cfg_path}' exists. Overwrite? [y/N]: ").strip().lower()
                         if resp != "y":
