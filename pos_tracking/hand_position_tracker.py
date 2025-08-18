@@ -123,14 +123,204 @@ class hand_position_tracker:
         self._pose_stack = deque(maxlen=self.POSE_AVG_FR)
         self._last_world_xyz = None
         self._last_norm_xyz = (0.0, 0.0, 0.0)
+        
+        
+        #finger joint pose
+        
+        # --- Angles (degrees): most recent frame, flexion-only ---
+        # Fingers: { 'MCP': float, 'PIP': float, 'DIP': float }
+        # Thumb:   { 'CMC': float, 'MCP': float, 'IP':  float }
+        self._angles = {
+            'index':  {'MCP': 0.0, 'PIP': 0.0, 'DIP': 0.0},
+            'middle': {'MCP': 0.0, 'PIP': 0.0, 'DIP': 0.0},
+            'ring':   {'MCP': 0.0, 'PIP': 0.0, 'DIP': 0.0},
+            'pinky':  {'MCP': 0.0, 'PIP': 0.0, 'DIP': 0.0},
+            'thumb':  {'CMC': 0.0, 'MCP': 0.0, 'IP':  0.0},
+        }
+        # Per-landmark EMA (camera-frame 3D points), keyed by lm idx
+        self._ema_pts = {}
+        self.ANGLE_EMA_ALPHA = 0.7      # angle smoothing (EMA in angle-space)
+        self.PT_EMA_ALPHA    = 0.75     # 3D point smoothing (already similar for wrist)
+                # ---- Hand-flexion calibration (separate from XYZ/pose) ----
+        # Folder: TransducerM_Lib_Protocol_CPP\calibration\hand_calibration
+        self.HAND_CALIB_DIR = os.path.join(self.PROJ_ROOT, "calibration", "hand_calibration")
+        os.makedirs(self.HAND_CALIB_DIR, exist_ok=True)
+
+        # Open/Close angle snapshots (degrees) captured from self._angles
+        self._hand_open  = None   # same nested dict shape as self._angles
+        self._hand_close = None
+
+        # Min usable range (deg). If |close - open| < threshold ⇒ normalized = 0 for safety.
+        self.HAND_MIN_RANGE_DEG = 5.0
 
 
+    # ---------- Vector helpers for joint angles ----------
+    @staticmethod
+    def _unit(v):
+        v = np.asarray(v, np.float32).reshape(-1)
+        n = np.linalg.norm(v)
+        return v / max(n, 1e-9)
+
+    @staticmethod
+    def _project_to_plane(v, n_hat):
+        # remove component along plane normal n_hat
+        v = np.asarray(v, np.float32).reshape(-1)
+        n_hat = hand_position_tracker._unit(n_hat)
+        return v - np.dot(v, n_hat) * n_hat
+
+    @staticmethod
+    def _angle_between(v1, v2):
+        # robust unsigned angle in radians
+        v1 = hand_position_tracker._unit(v1)
+        v2 = hand_position_tracker._unit(v2)
+        c = float(np.clip(np.dot(v1, v2), -1.0, 1.0))
+        s = float(np.linalg.norm(np.cross(v1, v2)))
+        return math.atan2(s, c)
+
+    @staticmethod
+    def _ema(prev, new, alpha):
+        return (alpha * prev + (1.0 - alpha) * new) if prev is not None else new
 
     # ======== Config-name helpers ========
     @staticmethod
     def _valid_basename(name: str) -> bool:
         # letters, digits, underscore, dash only
         return bool(re.fullmatch(r"[A-Za-z0-9_-]+", name))
+    
+    def _landmarks_cam3d(self, df, lms):
+        """
+        Returns np.array shape (21, 3) of camera-frame 3D points (meters),
+        or None if too many depths are missing.
+        """
+        pts = np.zeros((21, 3), np.float32)
+        ok_count = 0
+        for i, lm in enumerate(lms.landmark):
+            u = float(lm.x) * self.COLOR_W
+            v = float(lm.y) * self.COLOR_H
+            z = self._depth_at_m(df, u, v, k=self.K_NEIGH)
+            if not (z > 0 and self.DEPTH_RANGE[0] <= z <= self.DEPTH_RANGE[1]):
+                pts[i, :] = np.nan
+                continue
+            p = np.array(rs.rs2_deproject_pixel_to_point(self.intr, [u, v], z), dtype=np.float32).reshape(3)
+            # EMA smooth each landmark in 3D
+            prev = self._ema_pts.get(i)
+            p_s  = self._ema(prev, p, self.PT_EMA_ALPHA)
+            self._ema_pts[i] = p_s
+            pts[i, :] = p_s
+            ok_count += 1
+        if ok_count < 12:  # too few
+            return None
+        return pts
+
+
+
+    def _compute_flexions_deg(self, P):
+        """
+        P: (21,3) camera-frame 3D landmarks (meters).
+        Updates self._angles (degrees) with flexion-only angles.
+        """
+        # Indices as in MediaPipe
+        W  = 0
+        # Thumb: 1,2,3,4; Index: 5,6,7,8; Middle: 9,10,11,12; Ring: 13,14,15,16; Pinky: 17,18,19,20
+
+        # Basic sanity: if any critical point is nan, skip
+        def ok(i): return np.isfinite(P[i]).all()
+
+        # Palm normal: use wrist(0), index_mcp(5), pinky_mcp(17)
+        if ok(0) and ok(5) and ok(17):
+            v1 = P[5] - P[0]
+            v2 = P[17] - P[0]
+            n_palm = self._unit(np.cross(v2, v1))  # outward normal (pick a consistent winding)
+        else:
+            n_palm = np.array([0, 0, 1], np.float32)
+
+        def ema_angle(key1, key2, new_deg):
+            prev = self._angles[key1][key2]
+            # EMA in angle space (in degrees). Keep it simple since ranges are small.
+            self._angles[key1][key2] = float(self._ema(prev, new_deg, self.ANGLE_EMA_ALPHA))
+
+        def joint_angle_flexion(parent_vec, child_vec, ray_for_plane=None):
+            """
+            Compute flexion between parent_vec and child_vec after projecting both
+            into a 'sagittal' plane. If ray_for_plane is provided, build the plane
+            from the palm normal and this finger ray; otherwise project using palm normal only.
+            Returns degrees in [0, 180].
+            """
+            if ray_for_plane is not None and np.linalg.norm(ray_for_plane) > 0:
+                # sagittal plane normal ~ cross(finger_ray, palm_normal)
+                n_plane = self._unit(np.cross(self._unit(ray_for_plane), n_palm))
+                v1p = self._project_to_plane(parent_vec, n_plane)
+                v2p = self._project_to_plane(child_vec,  n_plane)
+            else:
+                # fallback: just project out of palm normal
+                v1p = self._project_to_plane(parent_vec, n_palm)
+                v2p = self._project_to_plane(child_vec,  n_palm)
+            rad = self._angle_between(v1p, v2p)
+            return math.degrees(rad)
+
+        # ---- Four fingers: MCP/PIP/DIP flexion ----
+        fingers = {
+            'index':  (5,6,7,8),
+            'middle': (9,10,11,12),
+            'ring':   (13,14,15,16),
+            'pinky':  (17,18,19,20),
+        }
+        for name, (mcp, pip, dip, tip) in fingers.items():
+            if not (ok(W) and ok(mcp) and ok(pip) and ok(dip) and ok(tip)):
+                continue
+            # Bones (child - joint)
+            v_meta = P[mcp] - P[W]        # approximate metacarpal
+            v_prox = P[pip] - P[mcp]
+            v_mid  = P[dip] - P[pip]
+            v_dist = P[tip] - P[dip]
+            # Finger ray for sagittal plane
+            ray = v_prox
+            # Flexions
+            a_mcp = joint_angle_flexion(v_meta, v_prox, ray_for_plane=ray)
+            a_pip = joint_angle_flexion(v_prox, v_mid,  ray_for_plane=ray)
+            a_dip = joint_angle_flexion(v_mid,  v_dist, ray_for_plane=ray)
+            ema_angle(name, 'MCP', a_mcp)
+            ema_angle(name, 'PIP', a_pip)
+            ema_angle(name, 'DIP', a_dip)
+
+        # ---- Thumb: CMC/MCP/IP flexion ----
+        # Landmarks: CMC=1, MCP=2, IP=3, TIP=4
+        if ok(1) and ok(2) and ok(3) and ok(4) and ok(W):
+            v_meta_t = P[1] - P[W]    # wrist→CMC as metacarpal proxy
+            v_prox_t = P[2] - P[1]    # CMC→MCP
+            v_mid_t  = P[3] - P[2]    # MCP→IP
+            v_dist_t = P[4] - P[3]    # IP→TIP
+            ray_t    = v_prox_t
+
+            a_cmc = joint_angle_flexion(v_meta_t, v_prox_t, ray_for_plane=ray_t)
+            a_mcp = joint_angle_flexion(v_prox_t, v_mid_t,  ray_for_plane=ray_t)
+            a_ip  = joint_angle_flexion(v_mid_t,  v_dist_t, ray_for_plane=ray_t)
+            ema_angle('thumb', 'CMC', a_cmc)
+            ema_angle('thumb', 'MCP', a_mcp)
+            ema_angle('thumb', 'IP',  a_ip)
+            
+    # ---------- Flexion getters (degrees) ----------
+    def get_flexion_index(self):
+        """Return {'MCP':deg, 'PIP':deg, 'DIP':deg} (degrees)."""
+        return dict(self._angles['index'])
+
+    def get_flexion_middle(self):
+        return dict(self._angles['middle'])
+
+    def get_flexion_ring(self):
+        return dict(self._angles['ring'])
+
+    def get_flexion_pinky(self):
+        return dict(self._angles['pinky'])
+
+    def get_flexion_thumb(self):
+        """Return {'CMC':deg, 'MCP':deg, 'IP':deg} (degrees)."""
+        return dict(self._angles['thumb'])
+
+    def get_all_flexions(self):
+        """Convenience snapshot of all fingers (degrees)."""
+        return {k: dict(v) for k, v in self._angles.items()}
+
     
     def _resolve_cfg_path(self, path_or_base: str) -> str:
         """If given a bare name (no .yaml or folder), drop into CALIB_DIR and add .yaml."""
@@ -165,9 +355,6 @@ class hand_position_tracker:
                 continue
             return base
 
-    # @staticmethod
-    # def _to_yaml_path(basename: str) -> str:
-    #     return f"{basename}.yaml"
 
 
     # ======== Public getters/setters ========
@@ -341,7 +528,14 @@ class hand_position_tracker:
                     self.mp_style.get_default_hand_landmarks_style(),
                     self.mp_style.get_default_hand_connections_style()
                 )
-            # pick wrist
+
+            # === NEW: all 21 points in camera frame (3D) ===
+            P_cam = self._landmarks_cam3d(df, lms)
+            if P_cam is not None:
+                # Compute flexion angles (degrees), updates self._angles
+                self._compute_flexions_deg(P_cam)
+
+            # Continue wrist-specific depth & world mapping (existing behavior)
             lm = lms.landmark[int(self.SHOW_LM)]
             u = lm.x * self.COLOR_W
             v = lm.y * self.COLOR_H

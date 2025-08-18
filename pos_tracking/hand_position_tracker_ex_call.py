@@ -34,10 +34,24 @@ def main():
                 last_print = now
                 nx, ny, nz = tracker.get_normalized_xyz()
                 wxyz = tracker.get_world_xyz()
+    
+                # Get all finger flexions
+                index_flex = tracker.get_flexion_index()
+                middle_flex = tracker.get_flexion_middle()
+                ring_flex = tracker.get_flexion_ring()
+                pinky_flex = tracker.get_flexion_pinky()
+                thumb_flex = tracker.get_flexion_thumb()
+                
                 if wxyz is not None:
-                    print(f"World [m]: x={wxyz[0]:+.3f}, y={wxyz[1]:+.3f}, z={wxyz[2]:+.3f} | "
-                          f"Norm [-1,1]: nx={nx:+.2f}, ny={ny:+.2f}, nz={nz:+.2f}")
-
+                    # print(f"World [m]: x={wxyz[0]:+.3f}, y={wxyz[1]:+.3f}, z={wxyz[2]:+.3f}")
+                    print(f"Norm [-1,1]: nx={nx:+.2f}, ny={ny:+.2f}, nz={nz:+.2f}")
+                    
+                    print(f"Index: MCP={index_flex['MCP']:+.1f}° PIP={index_flex['PIP']:+.1f}° DIP={index_flex['DIP']:+.1f}°")
+                    # print(f"Middle: MCP={middle_flex['MCP']:+.1f}° PIP={middle_flex['PIP']:+.1f}° DIP={middle_flex['DIP']:+.1f}°")
+                    # print(f"Ring: MCP={ring_flex['MCP']:+.1f}° PIP={ring_flex['PIP']:+.1f}° DIP={ring_flex['DIP']:+.1f}°")
+                    # print(f"Pinky: MCP={pinky_flex['MCP']:+.1f}° PIP={pinky_flex['PIP']:+.1f}° DIP={pinky_flex['DIP']:+.1f}°")
+                    # print(f"Thumb: CMC={thumb_flex['CMC']:+.1f}° MCP={thumb_flex['MCP']:+.1f}° IP={thumb_flex['IP']:+.1f}°")
+                            
             # Basic hotkeys still work if you want them during runtime
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), ord('Q')):
