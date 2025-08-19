@@ -103,17 +103,17 @@ def main():
 
             # --- Build actions ---
             # Arm IK pose expects [x, y, z, r, p, y] (we're sending normalized as requested)
-            # arm_action = torch.tensor(
-            #     [clamp01(nr), clamp01(np_), clamp01(nyaw),
-            #      clamp01(nx), clamp01(ny), clamp01(nz)],
-            #     dtype=torch.float32, device=device
-            # )
-            
             arm_action = torch.tensor(
-                [0, 0, 0,
-                 0, 0, 0],
+                [clamp01(nr), clamp01(np_), clamp01(nyaw),
+                 clamp01(nx), clamp01(ny), clamp01(nz)],
                 dtype=torch.float32, device=device
             )
+            
+            # arm_action = torch.tensor(
+            #     [0, 0, 0,
+            #      0, 0, 0],
+            #     dtype=torch.float32, device=device
+            # )
 
             # Allegro hand joints: 16-dof normalized [-1,1]
             hand_action = torch.zeros(hand_ctrl.dof, device=device, dtype=torch.float32)

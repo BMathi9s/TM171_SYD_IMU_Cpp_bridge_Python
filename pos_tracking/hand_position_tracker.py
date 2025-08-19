@@ -45,7 +45,7 @@ class hand_position_tracker:
     # ---- Defaults / Tunables ----
     DEFAULT_W = 640
     DEFAULT_H = 480
-    DEFAULT_FPS = 90
+    DEFAULT_FPS = 30
 
     def __init__(
         self,
