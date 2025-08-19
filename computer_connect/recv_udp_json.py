@@ -1,6 +1,12 @@
 import socket, json, time, argparse, select
 #python3 recv_udp_json.py --bind 0.0.0.0 --port 9101
 
+
+
+# timedatectl status
+# sudo timedatectl set-ntp true     # or: sudo apt install chrony
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bind", default="0.0.0.0", help="Bind IP on Sim PC")
