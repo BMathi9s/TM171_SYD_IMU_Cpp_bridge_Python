@@ -56,7 +56,7 @@ class hand_position_tracker:
         depth_range=(0.25, 1.8),
         k_neigh=5,                       # median patch for depth sampling
         ema_alpha=0.75,                  # 3D smoothing
-        pose_avg_frames=300,              # frames to average on capture
+        pose_avg_frames=100,              # frames to average on capture
         cfg_file= None,
         show_landmark=mp.solutions.hands.HandLandmark.WRIST,
         bake_adjustments_at_capture=True # keep "as-is" behavior
