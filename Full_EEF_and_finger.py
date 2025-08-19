@@ -56,7 +56,7 @@ def main():
 
             # Print values to terminal at ~10 Hz
             now = time.time()
-            if now - last_print > 0.10:
+            if now - last_print > 0.01:
                 last_print = now
                 nx, ny, nz = tracker.get_normalized_xyz()
                 wxyz = tracker.get_world_xyz()
