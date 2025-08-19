@@ -14,6 +14,9 @@ Sends:
   t_ms: sender wall-clock (ms)
   f   : 12 floats in [-1,1]  (thumb CMC,MCP,IP, index MCP,PIP,DIP, middle MCP,PIP,DIP, ring MCP,PIP,DIP)
   xyz : 3 floats in [-1,1]   (nx, ny, nz)
+  
+  python mp_sender.py --dest 10.10.0.2 --port
+                9101 --show --draw
 
 Run:
   python mp_sender.py --dest 10.10.0.2 --port 9101
