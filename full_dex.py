@@ -5,27 +5,13 @@ import torch
 import cv2
 
 # --- Your modules ---
-from pos_tracking.hand_position_tracker import hand_position_tracker
-from imu_client import ImuUdpClient
+from TM171_SYD_IMU_Cpp_bridge_Python.pos_tracking.hand_position_tracker import hand_position_tracker
+from TM171_SYD_IMU_Cpp_bridge_Python.imu_client import ImuUdpClient
 
 # --- DexSuite / Genesis ---
 import dexsuite as ds
 
-# Silence Genesis FPS spam
-genesis_logger = logging.getLogger('genesis')
-class _FPSFilter(logging.Filter):
-    def filter(self, record): return 'FPS' not in record.getMessage()
-genesis_logger.addFilter(_FPSFilter())
-genesis_logger.setLevel(logging.WARNING)
 
-class _Silence:
-    def __enter__(self):
-        self._stderr, self._stdout = sys.stderr, sys.stdout
-        sys.stderr = open(os.devnull, 'w'); sys.stdout = open(os.devnull, 'w')
-        return self
-    def __exit__(self, *_):
-        sys.stderr.close(); sys.stdout.close()
-        sys.stderr, sys.stdout = self._stderr, self._stdout
 
 def clamp01(v):  # actually [-1,1]
     return float(max(-1.0, min(1.0, v)))
@@ -33,21 +19,21 @@ def clamp01(v):  # actually [-1,1]
 def main():
     # === 0) IMU bring-up ===
     imu = ImuUdpClient(smooth_alpha=0.0)
-    imu.wait_for_first_sample(timeout_s=2.0)
+    imu.wait_for_first_sample(timeout_s=1.0)
     imu.zero_current_rpy()   # make current pose the zero
 
     # === 1) DexSuite env with IK pose on the arm, joint-pos on Allegro ===
     print("[init] Starting DexSuite with IK pose controller…")
-    with _Silence():
-        env = ds.make(
-            "reach",
-            manipulator     = "franka",
-            gripper         = "allegro",
-            arm_control     = "IK_POSE",         # <— absolute IK pose controller
-            gripper_control = "JOINT_POSITION",  # Allegro joints as before
-            render_mode     = "human",
-        )
-        env.reset()
+    # with _Silence():
+    env = ds.make(
+        "reach",
+        manipulator     = "franka",
+        gripper         = "allegro",
+        arm_control     = "osc_pose",         # <— absolute IK pose controller
+        gripper_control = "JOINT_POSITION",  # Allegro joints as before
+        render_mode     = "human",
+    )
+    env.reset()
 
     hand_ctrl = env.robot.hand_ctrl
     arm_ctrl  = env.robot.arm_ctrl
@@ -78,14 +64,14 @@ def main():
     if not res_xyz:
         print("[init] XYZ step cancelled; exiting.")
         tracker.stop()
-        with _Silence(): env.close()
+        env.close()
         return
 
     res_hand = tracker.hand_startup_menu(window_name=MAIN_WIN)
     if not res_hand:
         print("[init] Hand step cancelled; exiting.")
         tracker.stop()
-        with _Silence(): env.close()
+        env.close()
         return
 
     print("[run] Driving Allegro fingers from tracker; EEF from normalized XYZ + IMU RPY.")
@@ -117,9 +103,15 @@ def main():
 
             # --- Build actions ---
             # Arm IK pose expects [x, y, z, r, p, y] (we're sending normalized as requested)
+            # arm_action = torch.tensor(
+            #     [clamp01(nr), clamp01(np_), clamp01(nyaw),
+            #      clamp01(nx), clamp01(ny), clamp01(nz)],
+            #     dtype=torch.float32, device=device
+            # )
+            
             arm_action = torch.tensor(
-                [clamp01(nx), clamp01(ny), clamp01(nz),
-                 clamp01(nr), clamp01(np_), clamp01(nyaw)],
+                [0, 0, 0,
+                 0, 0, 0],
                 dtype=torch.float32, device=device
             )
 
@@ -151,12 +143,12 @@ def main():
             hand_action[JOINTS_RING[3]]   = clamp01(n_ring['DIP'])
 
             # --- Step sim ---
-            with _Silence():
-                obs, reward, terminated, truncated, info = env.step((arm_action, hand_action))
+            # with _Silence():
+            obs, reward, terminated, truncated, info = env.step((arm_action, hand_action))
 
             # --- Light console prints @ ~10 Hz ---
             now = time.time()
-            if now - last_print > 0.10:
+            if now - last_print > 1.10:
                 last_print = now
                 print(
                     f"EEF n-XYZ=({nx:+.2f},{ny:+.2f},{nz:+.2f})  "
@@ -176,14 +168,14 @@ def main():
             if key in (ord('i'), ord('I')):
                 imu.zero_current_rpy()  # set current orientation as new zero
 
-            time.sleep(dt)
+            # time.sleep(dt)
 
     except KeyboardInterrupt:
         print("\n[run] Interrupted.")
     finally:
         print("[exit] Cleaning up…")
         tracker.stop()
-        with _Silence(): env.close()
+        env.close()
         print("[exit] Done.")
 
 if __name__ == "__main__":

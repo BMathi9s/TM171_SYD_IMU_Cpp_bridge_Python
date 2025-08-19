@@ -52,11 +52,11 @@ class hand_position_tracker:
         color_w=DEFAULT_W,
         color_h=DEFAULT_H,
         fps=DEFAULT_FPS,
-        tag_size_m=0.08,                 # you printed 80 mm → 0.08 m
+        tag_size_m=0.072,                 # you printed 80 mm → 0.08 m
         depth_range=(0.25, 1.8),
         k_neigh=5,                       # median patch for depth sampling
         ema_alpha=0.75,                  # 3D smoothing
-        pose_avg_frames=30,              # frames to average on capture
+        pose_avg_frames=300,              # frames to average on capture
         cfg_file= None,
         show_landmark=mp.solutions.hands.HandLandmark.WRIST,
         bake_adjustments_at_capture=True # keep "as-is" behavior
@@ -621,8 +621,8 @@ class hand_position_tracker:
             cv2.putText(color_bgr, "[ENTER]=OK   [BACKSPACE]=del   [ESC]=cancel", (10, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,180,180), 1)
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None:
+            #     cv2.imshow("Depth (vis)", depth_vis)
 
             k = cv2.waitKey(1) & 0xFF
             if k in (13, 10):   # ENTER
@@ -647,8 +647,8 @@ class hand_position_tracker:
                 continue
             cv2.putText(color_bgr, message, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None:
+            #     cv2.imshow("Depth (vis)", depth_vis)
             cv2.waitKey(1)
 
 
@@ -1027,8 +1027,8 @@ class hand_position_tracker:
             cv2.putText(color_bgr, "[L] Load existing   [N] New (open wizard)   [ESC] Cancel", (10, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None:
+            #     cv2.imshow("Depth (vis)", depth_vis)
 
             k = cv2.waitKey(1) & 0xFF
             if k == 27:  # ESC
@@ -1080,8 +1080,8 @@ class hand_position_tracker:
             cv2.putText(color_bgr, "[L] Load existing   [N] New (open wizard)   [ESC] Skip", (10, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None:
+            #     cv2.imshow("Depth (vis)", depth_vis)
 
             k = cv2.waitKey(1) & 0xFF
             if k == 27:  # ESC
@@ -1153,8 +1153,8 @@ class hand_position_tracker:
             y = _put(color_bgr, f"Pose: {'LOCKED' if self._have_pose else '—'}   Limits set: {all(v is not None for v in self.lims.values())}", y)
 
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None:
+            #     cv2.imshow("Depth (vis)", depth_vis)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (13, 10):  # ENTER/RETURN
@@ -1213,7 +1213,7 @@ class hand_position_tracker:
                         y = y0
                         cv2.putText(color_bgr, ask, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2); y += 24
                         cv2.imshow(window_name, color_bgr)
-                        if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
+                        # if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
                         kk = cv2.waitKey(1) & 0xFF
                         if kk in (ord('y'), ord('Y')):
                             break
@@ -1264,8 +1264,7 @@ class hand_position_tracker:
                 y = _put(color_bgr, f"Index MCP/PIP/DIP (norm): {idx_n['MCP']:+.2f} {idx_n['PIP']:+.2f} {idx_n['DIP']:+.2f}", y)
 
             cv2.imshow(window_name, color_bgr)
-            if depth_vis is not None:
-                cv2.imshow("Depth (vis)", depth_vis)
+            # if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (13, 10):  # ENTER
@@ -1302,7 +1301,7 @@ class hand_position_tracker:
                         if color_bgr is None: continue
                         cv2.putText(color_bgr, ask, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
                         cv2.imshow(window_name, color_bgr)
-                        if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
+                        # if depth_vis is not None: cv2.imshow("Depth (vis)", depth_vis)
                         kk = cv2.waitKey(1) & 0xFF
                         if kk in (ord('y'), ord('Y')):
                             break
