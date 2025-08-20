@@ -146,13 +146,13 @@ def main():
     imu = ImuUdpClient(smooth_alpha=0.0)
     imu.wait_for_first_sample(timeout_s=1.0)
     imu.zero_current_rpy()
-
+    #[ x: 175.3799773, y: -3.9643635, z: 89.8886347 ]
     # === 1) DexSuite env ===
     env = ds.make(
         "reach",
         manipulator     = "franka",
         gripper         = "allegro",
-        arm_control     = "osc_pose",
+        arm_control     = "ik_pose",
         gripper_control = "JOINT_POSITION",
         render_mode     = "human",
     )
@@ -210,7 +210,7 @@ def main():
             # ---- 3) Build actions ----
             # OSC_POSE tuple (you previously noted order is (r,p,y,x,y,z))
             arm_action = torch.tensor(
-                [clamp01(nr)*ROT_GAIN, clamp01(np_)*ROT_GAIN, clamp01(nyaw)*ROT_GAIN,
+                [clamp01(nx)*ROT_GAIN, clamp01(ny)*ROT_GAIN, clamp01(nz)*ROT_GAIN,
                  clamp01(nx)*POS_GAIN, clamp01(ny)*POS_GAIN, clamp01(nz)*POS_GAIN],
                 dtype=torch.float32, device=device
             )
