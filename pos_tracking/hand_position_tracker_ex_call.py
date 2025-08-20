@@ -1,7 +1,7 @@
 # demo_run.py
 import time
 import cv2
-from euro_hand_position_tracker import hand_position_tracker
+from gpu_hand_position_tracker import hand_position_tracker
 
 def main():
     tracker = hand_position_tracker(

@@ -10,10 +10,8 @@ import pyrealsense2 as rs
 import re  
 
 
-#TODO when clicking on c is doesnt lock the camera pose to the world space anymore, gotta fix that, but its not a big deal
-#TODO improve fingger tracking ~ maybe each finger calibration or ik or differnet filter
-
-
+#TODO when clicking on c is doesnt lock the camera pose when running to the world space anymore, gotta fix that, but its not a big deal
+#TODO improve fingger calibration
 
 
 import math, time
@@ -93,7 +91,7 @@ class hand_position_tracker:
         color_h=DEFAULT_H,
         fps=DEFAULT_FPS,
         tag_size_m=0.072,                 # you printed 80 mm → 0.08 m
-        depth_range=(0.25, 1.8),
+        depth_range=(0.25, 2.2),
         k_neigh=5,                       # median patch for depth sampling
         ema_alpha=0.75,                  # 3D smoothing
         pose_avg_frames=100,              # frames to average on capture

@@ -9,6 +9,11 @@ import pyrealsense2 as rs
 import re  
 
 
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
+
+
 #TODO when clicking on c is doesnt lock the camera pose when running to the world space anymore, gotta fix that, but its not a big deal
 #TODO improve fingger calibration
 
@@ -113,14 +118,19 @@ class hand_position_tracker:
         self.aruco = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
         # MediaPipe
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False, max_num_hands=1,
-            min_detection_confidence=0.6, min_tracking_confidence=0.6,
-            model_complexity=1
+        base_opts = mp_python.BaseOptions(
+            model_asset_path="hand_landmarker.task",  # put the .task file next to your script
+            delegate=mp_python.BaseOptions.Delegate.GPU
         )
-        self.mp_draw  = mp.solutions.drawing_utils
-        self.mp_style = mp.solutions.drawing_styles
+        hl_opts = mp_vision.HandLandmarkerOptions(
+            base_options=base_opts,
+            num_hands=1,
+            min_hand_detection_confidence=0.6,
+            min_hand_presence_confidence=0.6,
+            min_tracking_confidence=0.6,
+            # running_mode omitted → defaults to IMAGE
+        )
+        self.hands = mp_vision.HandLandmarker.create_from_options(hl_opts)
 
         # World/Calib state
         self._have_pose = False
@@ -791,137 +801,128 @@ class hand_position_tracker:
             cv2.destroyAllWindows()
 
     # ======== Core processing ========
-    def process(self, draw_landmarks=True):
-        """
-        Pull one frame pair, run tag detect (for viz), run hand detect,
-        update world/normalized XYZ, and return (color_bgr, depth_vis).
-        """
-        frames = self.pipe.wait_for_frames()
-        frames = self.align.process(frames)
+    
+    
+    # ======== Core processing ========
+def process(self, draw_landmarks=True):
+    """
+    Pull one frame pair, run tag detect (for viz), run hand detect (GPU via Tasks),
+    update world/normalized XYZ, and return (color_bgr, depth_vis).
+    """
+    # Grab and align frames
+    frames = self.pipe.wait_for_frames()
+    frames = self.align.process(frames)
 
-        depth_frame = frames.get_depth_frame()
-        color_frame = frames.get_color_frame()
-        if not depth_frame or not color_frame:
-            return None, None
+    depth_frame = frames.get_depth_frame()
+    color_frame = frames.get_color_frame()
+    if not depth_frame or not color_frame:
+        return None, None
 
-        # Filters
-        df = depth_frame
-        df = self.depth_filters["spatial"].process(df)
-        df = self.depth_filters["temporal"].process(df)
-        df = self.depth_filters["holefill"].process(df)
-        df = df.as_depth_frame() or depth_frame
+    # Depth filtering (keep as-is)
+    df = depth_frame
+    df = self.depth_filters["spatial"].process(df)
+    df = self.depth_filters["temporal"].process(df)
+    df = self.depth_filters["holefill"].process(df)
+    df = df.as_depth_frame() or depth_frame
 
-        color_bgr = np.asanyarray(color_frame.get_data())
-        color_rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
+    # Color image
+    color_bgr = np.asanyarray(color_frame.get_data())
+    color_rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
 
-        # Tag pose (for drawing; capture_pose() does its own averaging)
-        det = self._detect_tag_pose(color_bgr)
-        if det is not None:
-            corners, tag_id, rvec, tvec = det
-            cv2.aruco.drawDetectedMarkers(color_bgr, [corners], np.array([[tag_id]], dtype=np.int32))
-            cv2.drawFrameAxes(color_bgr, self.Kcv, self.Dcv, rvec, tvec, self.TAG_SIZE_M*0.5)
+    # ---------- AprilTag (for drawing only; pose capture has its own averaging) ----------
+    det = self._detect_tag_pose(color_bgr)
+    if det is not None:
+        corners, tag_id, rvec, tvec = det
+        cv2.aruco.drawDetectedMarkers(color_bgr, [corners], np.array([[tag_id]], dtype=np.int32))
+        cv2.drawFrameAxes(color_bgr, self.Kcv, self.Dcv, rvec, tvec, self.TAG_SIZE_M * 0.5)
 
-        # Hands
-        res = self.hands.process(color_rgb)
-        depth_raw = np.asanyarray(df.get_data())
-        depth_vis = cv2.convertScaleAbs(depth_raw, alpha=0.03)
+    # ---------- Hands (GPU via MediaPipe Tasks) ----------
+    # Build MP image and run detector
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=color_rgb)
+    res = self.hands.detect(mp_img)
 
-        world_xyz = None
-        nvec = (0.0, 0.0, 0.0)
+    # Adapt Tasks output to a minimal object compatible with our downstream code
+    lms = None
+    if res and len(res.hand_landmarks) > 0:
+        # Tiny structs to mimic .landmark[i].x/.y/.z and container with .landmark
+        class _Lm:
+            __slots__ = ("x", "y", "z")
+            def __init__(self, x, y, z=0.0):
+                self.x, self.y, self.z = x, y, z
 
-        if res.multi_hand_landmarks:
-            lms = res.multi_hand_landmarks[0]
-            if draw_landmarks:
-                self.mp_draw.draw_landmarks(
-                    color_bgr, lms, self.mp_hands.HAND_CONNECTIONS,
-                    self.mp_style.get_default_hand_landmarks_style(),
-                    self.mp_style.get_default_hand_connections_style()
-                )
+        class _Lms:
+            __slots__ = ("landmark",)
+            def __init__(self, arr):
+                self.landmark = arr
 
-            # === NEW: all 21 points in camera frame (3D) ===
-            P_cam = self._landmarks_cam3d(df, lms)
-            if P_cam is not None:
-                # Compute flexion angles (degrees), updates self._angles
-                self._compute_flexions_deg(P_cam)
+        pts = [_Lm(p.x, p.y, getattr(p, "z", 0.0)) for p in res.hand_landmarks[0]]
+        lms = _Lms(pts)
 
-            # Continue wrist-specific depth & world mapping (existing behavior)
-            lm = lms.landmark[int(self.SHOW_LM)]
-            u = lm.x * self.COLOR_W
-            v = lm.y * self.COLOR_H
-            z = self._depth_at_m(df, u, v, k=self.K_NEIGH)
+        # Optional drawing using the same connections spec
+        if draw_landmarks:
+            self.mp_draw.draw_landmarks(
+                color_bgr,
+                lms,
+                self.mp_hands.HAND_CONNECTIONS,
+                self.mp_style.get_default_hand_landmarks_style(),
+                self.mp_style.get_default_hand_connections_style()
+            )
 
-            if z > 0 and self.DEPTH_RANGE[0] <= z <= self.DEPTH_RANGE[1]:
-                p_cam = np.array(rs.rs2_deproject_pixel_to_point(self.intr, [float(u), float(v)], float(z)), dtype=np.float32).reshape(3,1)
+    # Depth visualization
+    depth_raw = np.asanyarray(df.get_data())
+    depth_vis = cv2.convertScaleAbs(depth_raw, alpha=0.03)
 
-                # EMA smoothing
-                prev = self._ema_3d[0].get('wrist')
-                p_cam_s = p_cam if prev is None else self.EMA_ALPHA*prev + (1.0-self.EMA_ALPHA)*p_cam
-                self._ema_3d[0]['wrist'] = p_cam_s
+    world_xyz = None
+    nvec = (0.0, 0.0, 0.0)
 
-                if self._have_pose:
-                    # Adjusted R,t each frame (matches your current flow)
-                    R_adj = self._yaw_deg_R(90*self.yaw_steps) @ np.diag(self.axis_flip)
-                    Rwc = (R_adj @ self.R_world_cam).astype(np.float32)
-                    twc = (R_adj @ self.t_world_cam).astype(np.float32)
+    if lms is not None:
+        # === All 21 points in camera frame (3D) for finger flexion ===
+        P_cam = self._landmarks_cam3d(df, lms)
+        if P_cam is not None:
+            # Compute flexion angles (degrees), updates self._angles
+            self._compute_flexions_deg(P_cam)
 
-                    p_world = (Rwc @ p_cam_s + twc).reshape(3)
-                    world_xyz = p_world.copy()
+        # Wrist-specific depth & world mapping (existing behavior)
+        lm = lms.landmark[int(self.SHOW_LM)]
+        u = float(lm.x) * self.COLOR_W
+        v = float(lm.y) * self.COLOR_H
+        z = self._depth_at_m(df, u, v, k=self.K_NEIGH)
 
-                    # Normalize if limits are set
-                    if all(v is not None for v in self.lims.values()):
-                        pmin = [self.lims["x_min"], self.lims["y_min"], self.lims["z_min"]]
-                        pmax = [self.lims["x_max"], self.lims["y_max"], self.lims["z_max"]]
-                        n = self._normalize_unit(p_world, pmin, pmax)
-                        nvec = (float(n[0]), float(n[1]), float(n[2]))
+        if z > 0 and self.DEPTH_RANGE[0] <= z <= self.DEPTH_RANGE[1]:
+            p_cam = np.array(
+                rs.rs2_deproject_pixel_to_point(self.intr, [u, v], z),
+                dtype=np.float32
+            ).reshape(3, 1)
 
-                # annotate depth at wrist pixel
-                cv2.circle(color_bgr, (int(u), int(v)), 6, (0,255,0), 2)
-                cv2.putText(color_bgr, f"z={z:.3f} m", (int(u)+6, int(v)-6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+            # EMA smoothing
+            prev = self._ema_3d[0].get('wrist')
+            p_cam_s = p_cam if prev is None else self.EMA_ALPHA * prev + (1.0 - self.EMA_ALPHA) * p_cam
+            self._ema_3d[0]['wrist'] = p_cam_s
 
-        self._last_world_xyz = world_xyz
-        self._last_norm_xyz = nvec
-        return color_bgr, depth_vis
+            if self._have_pose:
+                # Adjusted R,t each frame (matches your current flow)
+                R_adj = self._yaw_deg_R(90 * self.yaw_steps) @ np.diag(self.axis_flip)
+                Rwc = (R_adj @ self.R_world_cam).astype(np.float32)
+                twc = (R_adj @ self.t_world_cam).astype(np.float32)
 
-    # ======== Pose capture ========
-    def capture_pose(self):
-        """Hold the tag board steady and call this once; averages several frames."""
-        self._pose_stack.clear()
-        for _ in range(self.POSE_AVG_FR):
-            frames = self.pipe.wait_for_frames()
-            frames = self.align.process(frames)
-            color = np.asanyarray(frames.get_color_frame().get_data())
-            det = self._detect_tag_pose(color)
-            if det is None:
-                continue
-            _, _, rvec, tvec = det
-            R_cm = self._rodrigues_to_R(rvec)    # marker→camera
-            t_cm = tvec                          # marker→camera
-            # camera→marker
-            R_mc, t_mc = self._invert_rt(R_cm, t_cm)
-            self._pose_stack.append((R_mc, t_mc))
-            time.sleep(0.004)
+                p_world = (Rwc @ p_cam_s + twc).reshape(3)
+                world_xyz = p_world.copy()
 
-        if len(self._pose_stack) < 5:
-            return False
+                # Normalize if limits are set
+                if all(v is not None for v in self.lims.values()):
+                    pmin = [self.lims["x_min"], self.lims["y_min"], self.lims["z_min"]]
+                    pmax = [self.lims["x_max"], self.lims["y_max"], self.lims["z_max"]]
+                    n = self._normalize_unit(p_world, pmin, pmax)
+                    nvec = (float(n[0]), float(n[1]), float(n[2]))
 
-        Rs = np.stack([p[0] for p in self._pose_stack], axis=0)
-        ts = np.stack([p[1].reshape(3) for p in self._pose_stack], axis=0)
-        R_mean = Rs[-1]  # (simple fallback; a full rotation avg can be added)
-        t_mean = ts.mean(axis=0).reshape(3,1).astype(np.float32)
+            # Annotate depth at wrist pixel
+            cv2.circle(color_bgr, (int(u), int(v)), 6, (0, 255, 0), 2)
+            cv2.putText(color_bgr, f"z={z:.3f} m", (int(u) + 6, int(v) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        if self.BAKE_AT_CAPTURE:
-            # base: world = marker; then apply yaw & flips immediately (matches your current code)
-            R_adj = self._yaw_deg_R(90*self.yaw_steps) @ np.diag(self.axis_flip)
-            self.R_world_cam = (R_adj @ R_mean).astype(np.float32)
-            self.t_world_cam = (R_adj @ t_mean).astype(np.float32)
-        else:
-            # store RAW, apply yaw/flip only at runtime (mathematically cleaner)
-            self.R_world_cam = R_mean.astype(np.float32)
-            self.t_world_cam = t_mean.astype(np.float32)
-
-        self._have_pose = True
-        return True
+    self._last_world_xyz = world_xyz
+    self._last_norm_xyz = nvec
+    return color_bgr, depth_vis
 
     # ======== HUD helpers (optional) ========
     @staticmethod
