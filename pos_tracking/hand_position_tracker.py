@@ -43,9 +43,9 @@ class hand_position_tracker:
     """
 
     # ---- Defaults / Tunables ----
-    DEFAULT_W = 640
+    DEFAULT_W = 848
     DEFAULT_H = 480
-    DEFAULT_FPS = 30
+    DEFAULT_FPS = 60
 
     def __init__(
         self,
@@ -733,7 +733,7 @@ class hand_position_tracker:
         # RealSense streams
         self.pipe = rs.pipeline()
         cfg = rs.config()
-        cfg.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, self.FPS)
+        cfg.enable_stream(rs.stream.depth, self.COLOR_W, self.COLOR_H, rs.format.z16, self.FPS)
         cfg.enable_stream(rs.stream.color, self.COLOR_W, self.COLOR_H, rs.format.bgr8, self.FPS)
         profile = self.pipe.start(cfg)
 
