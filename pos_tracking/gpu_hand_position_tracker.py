@@ -12,6 +12,7 @@ import re
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.framework.formats import landmark_pb2
 
 
 #TODO when clicking on c is doesnt lock the camera pose when running to the world space anymore, gotta fix that, but its not a big deal
