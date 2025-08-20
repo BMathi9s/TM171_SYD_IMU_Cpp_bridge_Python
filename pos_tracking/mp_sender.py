@@ -56,8 +56,10 @@ def main():
     )
     tracker.start()
 
-    MAIN_WIN = args.name
+    MAIN_WIN = "md_udp"
+    
     res_xyz  = tracker.startup_menu(window_name=MAIN_WIN if args.show else None)
+    
     if not res_xyz:
         print("[init] XYZ step cancelled; exiting.")
         tracker.stop(); return
