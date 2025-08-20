@@ -737,6 +737,18 @@ class hand_position_tracker:
         cfg.enable_stream(rs.stream.color, self.COLOR_W, self.COLOR_H, rs.format.bgr8, self.FPS)
         profile = self.pipe.start(cfg)
 
+        import time
+        t0 = time.time()
+        frames = None
+        while frames is None:
+            frames = self.pipe.poll_for_frames()     # returns None until something arrives
+            if frames:
+                break
+            if time.time() - t0 > 3.0:
+                raise RuntimeError("Camera started but no frames in 3s. Check USB3 and close RealSense Viewer.")
+            time.sleep(0.01)
+
+
         self.align = rs.align(rs.stream.color)
         
         
