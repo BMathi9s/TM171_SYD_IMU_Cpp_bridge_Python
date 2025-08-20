@@ -149,6 +149,38 @@ class ImuUdpClient:
             v = max(-180.0, min(180.0, v))
             return v / 180.0
         return tuple(_nz(v) for v in rpy)
+    
+    
+    def get_rpy_normalized_withrobot_pose(self,r= 175.3799773, p= -3.9643635, y= 89.8886347):
+        """Return normalized [-1,1] RPY where:
+        (IMU_read - imu_offset [+ mapping/inversion]) + robot_start_pose.
+        Robot start pose is in degrees.
+        """
+        if not self._have_offset:
+            raise RuntimeError("Call zero_current_rpy() or set_rpy_offset(...) first.")
+
+        # 1) This already returns (r,p,y) with your IMU offsets applied and axes/signs mapped,
+        #    wrapped to [-180, 180). See get_rpy_deg().
+        rpy = self.get_rpy_deg()
+        if rpy is None:
+            raise RuntimeError("No RPY data yet.")
+
+        # 2) Robot's actual start pose (degrees).
+        robot_start_deg = (r, p, y)
+
+        # 3) Add robot start, then wrap back into [-180, 180).
+        r = _wrap_angle_deg(rpy[0] + robot_start_deg[0])
+        p = _wrap_angle_deg(rpy[1] + robot_start_deg[1])
+        y = _wrap_angle_deg(rpy[2] + robot_start_deg[2])
+
+        # 4) Normalize to [-1, 1]
+        def _nz(v):
+            # clamp just in case, then scale
+            v = max(-180.0, min(180.0, v))
+            return v / 180.0
+
+        return (_nz(r), _nz(p), _nz(y))
+
 
     def wait_for_first_sample(self, timeout_s: float = 2.0) -> bool:
         """Block up to timeout_s until first RPY (or quat/raw) arrives. Returns True if ready."""
