@@ -18,9 +18,7 @@ def clamp01(v):  # actually [-1,1]
 
 def main():
     # === 0) IMU bring-up ===
-    imu = ImuUdpClient(smooth_alpha=0.0)
-    imu.wait_for_first_sample(timeout_s=1.0)
-    imu.zero_current_rpy()   # make current pose the zero
+
 
     # === 1) DexSuite env with IK pose on the arm, joint-pos on Allegro ===
     print("[init] Starting DexSuite with IK pose controller…")
