@@ -5,7 +5,7 @@ from hand_position_tracker import hand_position_tracker
 
 def main():
     tracker = hand_position_tracker(
-        color_w=848, color_h=480,fps=60
+        color_w=848, color_h=480,fps=60,
         tag_size_m=0.072,
         bake_adjustments_at_capture=True
     )

@@ -744,7 +744,7 @@ class hand_position_tracker:
             frames = self.pipe.poll_for_frames()     # returns None until something arrives
             if frames:
                 break
-            if time.time() - t0 > 3.0:
+            if time.time() - t0 > 10.0:
                 raise RuntimeError("Camera started but no frames in 3s. Check USB3 and close RealSense Viewer.")
             time.sleep(0.01)
 

@@ -33,8 +33,8 @@ def build_parser():
     ap.add_argument("--show", action="store_true", help="Show camera UI (slower)")
     ap.add_argument("--draw", action="store_true", help="Draw landmarks on the UI")
     ap.add_argument("--name", default="MP→UDP", help="Window name if --show")
-    ap.add_argument("--w", type=int, default=1280)
-    ap.add_argument("--h", type=int, default=720)
+    ap.add_argument("--w", type=int, default=848)
+    ap.add_argument("--h", type=int, default=480)
     return ap
 
 def clamp01(v):
