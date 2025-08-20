@@ -1,0 +1,64 @@
+'0':
+  max: 143.0
+  min: 99.0
+  valid: true
+'1':
+  max: 237.0
+  min: 56.0
+  valid: true
+'10':
+  max: 156.0
+  min: 27.0
+  valid: true
+'11':
+  max: 153.0
+  min: 67.0
+  valid: true
+'12':
+  max: 191.0
+  min: 149.0
+  valid: true
+'13':
+  max: 138.0
+  min: 123.0
+  valid: true
+'14':
+  max: 132.0
+  min: 78.0
+  valid: true
+'15':
+  max: 140.0
+  min: 139.0
+  valid: true
+'2':
+  max: 160.0
+  min: 109.0
+  valid: true
+'3':
+  max: 128.0
+  min: 51.0
+  valid: true
+'4':
+  max: 133.0
+  min: 30.0
+  valid: true
+'5':
+  max: 219.0
+  min: 109.0
+  valid: true
+'6':
+  max: 128.0
+  min: 57.0
+  valid: true
+'7':
+  max: 98.0
+  min: 53.0
+  valid: true
+'8':
+  max: 253.0
+  min: 14.0
+  valid: true
+'9':
+  max: 156.0
+  min: 137.0
+  valid: true

@@ -27,7 +27,7 @@ from TM171_SYD_IMU_Cpp_bridge_Python.imu_client import ImuUdpClient
 import dexsuite as ds
 
 # ======= Config knobs ======= #
-PRINT_EVERY_S   = 0.50   # console print period
+PRINT_EVERY_S   = 0.05   # console print period
 STALE_TIMEOUT_S = 0.60   # if no new UDP sample for this long, fall back to zeros
 # Optional gains if you want to scale normalized [-1,1] to phys units for OSC:
 POS_GAIN = 1.0   # keep 1.0 if your controller expects normalized [-1,1] directly
@@ -210,8 +210,7 @@ def main():
             # ---- 3) Build actions ----
             # OSC_POSE tuple (you previously noted order is (r,p,y,x,y,z))
             arm_action = torch.tensor(
-                [clamp01(nx)*ROT_GAIN, clamp01(ny)*ROT_GAIN, clamp01(nz)*ROT_GAIN,
-                 clamp01(nx)*POS_GAIN, clamp01(ny)*POS_GAIN, clamp01(nz)*POS_GAIN],
+                [0,0,0,0,0,0] ,
                 dtype=torch.float32, device=device
             )
 

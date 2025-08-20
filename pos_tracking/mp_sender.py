@@ -24,7 +24,7 @@ Run:
 import socket, json, time, argparse
 import cv2
 
-from hand_position_tracker import hand_position_tracker  # your module
+from gpu_hand_position_tracker import hand_position_tracker  # your module
 
 def build_parser():
     ap = argparse.ArgumentParser()
