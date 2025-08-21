@@ -13,7 +13,7 @@ import dexsuite as ds
 
 
 # ================================ knobs ================================= #
-SHOW_UI          = True     # set False to remove all imshow() overhead
+SHOW_UI          = False     # set False to remove all imshow() overhead
 UI_MAX_FPS       = 20       # cap UI draw rate
 DRAW_LANDMARKS   = False    # True = draw hands overlay in the worker thread
 STALE_TIMEOUT_S  = 0.6      # if inputs older than this, send zeros to hand
@@ -124,7 +124,7 @@ def main():
 
     # === Tracker bring-up on main thread (menus/wizards use OpenCV UI) ===
     tracker = hand_position_tracker(
-        color_w=1280, color_h=720,
+        color_w=640, color_h=360,
         tag_size_m=0.072,
         bake_adjustments_at_capture=True
     )

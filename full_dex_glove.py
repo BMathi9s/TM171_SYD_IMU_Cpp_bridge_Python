@@ -5,7 +5,7 @@ import torch
 
 # === Glove I/O (from glove.py) ===
 try:
-    from glove import (
+    from TM171_SYD_IMU_Cpp_bridge_Python.glove import (
         serial,  # type: ignore
         find_arduino_device,
         guided_calibration,
